@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Prepare a minimal *target-side* Python layout for cross-building grpcio.
+# Prepare a *target-side* Python layout for cross-building grpcio.
 #
-# GitHub runner host Python is only used for Cython / build tooling.
-# This script creates a target layout so the build step can point CFLAGS /
-# LD at the intended aarch64 Termux-style Python environment later.
+# This downloads CPython public headers so that a cross-compiled extension
+# can actually use Python.h.
 #
-# This is intentionally not a full CPython bootstrap.
+# It still does NOT build the full CPython interpreter for the target; it is
+# a practical middle step between "no headers" and "full CPython bootstrap".
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
@@ -23,10 +23,45 @@ TARGET_PYTHON_PLATFORM=termux-aarch64
 PYTHON_TARGET=${PYTHON_TARGET}
 EOF
 
-# Provide a tiny python-config style helper for later source-ing.
+if [ -f "$PYTHON_TARGET/include/Python.h" ]; then
+  echo "[termux-python] Python.h already present, skipping download"
+else
+  # Determine full CPython version (e.g. 3.12.12) from Python_VERSION
+  # Default to .0 suffix if not specified
+  CPYTHON_FULL_VERSION="${CPYTHON_FULL_VERSION:-${TARGET_PYTHON_VERSION}$(python3 -c "import sys;print('.'+str(sys.version_info[2]))" 2>/dev/null | cut -d'.' -f2 || echo '.12')}"
+  # Simplify: just use a known good full version
+  case "$TARGET_PYTHON_VERSION" in
+    3.12) CPYTHON_FULL_VERSION="3.12.7" ;;
+    3.11) CPYTHON_FULL_VERSION="3.11.9" ;;
+    3.10) CPYTHON_FULL_VERSION="3.10.14" ;;
+    *) CPYTHON_FULL_VERSION="${TARGET_PYTHON_VERSION}0" ;;
+  esac
+
+  echo "[termux-python] downloading CPython ${CPYTHON_FULL_VERSION} headers"
+  CPYTHON_TARBALL="$BUILD_DIR/Python-${CPYTHON_FULL_VERSION}.tgz"
+  if [ ! -f "$CPYTHON_TARBALL" ]; then
+    curl -fsSL \
+      "https://www.python.org/ftp/python/${TARGET_PYTHON_VERSION}/Python-${CPYTHON_FULL_VERSION}.tgz" \
+      -o "$CPYTHON_TARBALL"
+  fi
+
+  echo "[termux-python] extracting headers only"
+  # Extract only the Include directory
+  tar -xzf "$CPYTHON_TARBALL" \
+    "Python-${CPYTHON_FULL_VERSION}/Include" \
+    -C "$BUILD_DIR"
+
+  # Copy headers into our target layout
+  cp -rf "$BUILD_DIR/Python-${CPYTHON_FULL_VERSION}/Include/"* \
+    "$PYTHON_TARGET/include/"
+
+  echo "[termux-python] headers staged at $PYTHON_TARGET/include"
+fi
+
+# Provide a python-config style helper for later source-ing
 cat > "$PYTHON_TARGET/bin/python-config" <<EOF
 #!/usr/bin/env bash
-# Minimal python-config stub for cross-build scaffolding.
+# Minimal python-config helper for cross-build scaffolding.
 set -euo pipefail
 case "\${1:-}" in
   --includes)
@@ -49,4 +84,11 @@ esac
 EOF
 chmod +x "$PYTHON_TARGET/bin/python-config"
 
-echo "[termux-python] minimal target Python layout ready at $PYTHON_TARGET"
+# Verify Python.h is in place
+if [ ! -f "$PYTHON_TARGET/include/Python.h" ]; then
+  echo "[termux-python] ERROR: Python.h not found after staging"
+  ls -la "$PYTHON_TARGET/include/" | head -n 20
+  exit 1
+fi
+
+echo "[termux-python] target Python layout ready with real headers"

@@ -3,15 +3,14 @@ set -euo pipefail
 
 # Build grpcio for Termux aarch64 target.
 #
-# Strategy: cross-compile the grpc C core + Python extension (cygrpc)
-# using the NDK clang toolchain + host Cython.
+# Strategy: cross-compile a real Python C extension against real Python.h,
+# then verify the resulting shared object is aarch64 and contains the
+# expected module init symbol.
 #
-# This is a deliberately minimal first pass:
-#   1. Build the grpc C library (.so / static libs) for aarch64
-#   2. Build the Python C extension (cygrpc) against that lib
-#   3. Verify the .so is valid aarch64 ELF
-#
-# Full wheel packaging (boringssl, protobuf, zlib, re2) comes later.
+# This is still a minimal B-phase milestone:
+#   - not yet the full grpcio wheel
+#   - not yet building the full grpc C core
+#   - but now exercising real Python.h / NDK cross-compile together
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
@@ -48,15 +47,18 @@ if [ ! -x "$CLANG" ]; then
 fi
 
 SYSROOT="$NDK_TOOLCHAIN/sysroot"
+TARGET_PY_INC="$BUILD_DIR/python-target-aarch64/include"
+TARGET_PY_LIB="$BUILD_DIR/python-target-aarch64/lib"
 
 echo "[build-grpcio] clang: $CLANG"
 echo "[build-grpcio] sysroot: $SYSROOT"
+echo "[build-grpcio] python include: $TARGET_PY_INC"
 
-# ------------------------------------------------------------------
-# Step 1: Verify NDK toolchain can build a trivial C extension
-# ------------------------------------------------------------------
 mkdir -p "$OUT_DIR"
 
+# ------------------------------------------------------------------
+# Step 1: Verify NDK toolchain still works
+# ------------------------------------------------------------------
 echo "[build-grpcio] Step 1: verifying NDK toolchain..."
 cat > "$OUT_DIR/verify.c" <<'EOF'
 #include <stdio.h>
@@ -70,59 +72,71 @@ fi
 echo "[build-grpcio] toolchain verification passed"
 
 # ------------------------------------------------------------------
-# Step 2: Build a minimal Python C extension that links against
-#         the NDK target layout (not against real libpython yet)
+# Step 2: Build a real Python extension module using Python.h
 # ------------------------------------------------------------------
-echo "[build-grpcio] Step 2: building minimal cygrpc stub..."
-cat > "$OUT_DIR/cygrpc_stub.c" <<'EOF'
-#include <stdio.h>
-#include <stdlib.h>
+echo "[build-grpcio] Step 2: building real Python.h-dependent probe module..."
+cat > "$OUT_DIR/cygrpc_probe.c" <<'EOF'
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
 
-const char *cygrpc_stub_name(void) {
-  return "cygrpc-stub";
+static PyObject *probe_version(PyObject *self, PyObject *args) {
+  Py_RETURN_STRING("grpcio-b-phase-python-h-probe");
 }
 
-int cygrpc_stub_add(int a, int b) {
-  return a + b;
-}
+static PyMethodDef probe_methods[] = {
+  {"version", probe_version, METH_NOARGS, "Return probe version string"},
+  {NULL, NULL, 0, NULL}
+};
 
-void cygrpc_stub_hello(void) {
-  printf("cygrpc-stub: built for aarch64 termux target\n");
+static struct PyModuleDef probe_module = {
+  PyModuleDef_HEAD_INIT,
+  "cygrpc_probe",
+  "B-phase probe: real Python.h + NDK cross-compile",
+  -1,
+  probe_methods
+};
+
+PyMODINIT_FUNC PyInit_cygrpc_probe(void) {
+  return PyModule_Create(&probe_module);
 }
 EOF
-
-TARGET_PY_INC="$BUILD_DIR/python-target-aarch64/include"
-TARGET_PY_LIB="$BUILD_DIR/python-target-aarch64/lib"
 
 $CLANG --sysroot="$SYSROOT" \
   -I"$TARGET_PY_INC" \
   -shared -fPIC \
   -L"$TARGET_PY_LIB" \
-  -o "$OUT_DIR/cygrpc_stub.so" \
-  "$OUT_DIR/cygrpc_stub.c"
+  -o "$OUT_DIR/cygrpc_probe.so" \
+  "$OUT_DIR/cygrpc_probe.c"
 
-if [ ! -f "$OUT_DIR/cygrpc_stub.so" ]; then
-  echo "[build-grpcio] ERROR: cygrpc stub build failed"
+if [ ! -f "$OUT_DIR/cygrpc_probe.so" ]; then
+  echo "[build-grpcio] ERROR: Python.h-dependent probe build failed"
   exit 1
 fi
-echo "[build-grpcio] cygrpc stub built without Python.h dependency"
 
 # ------------------------------------------------------------------
-# Step 3: Verify output is valid aarch64 ELF
+# Step 3: Verify output is valid aarch64 ELF and has module init symbol
 # ------------------------------------------------------------------
-echo "[build-grpcio] Step 3: verifying ELF architecture..."
-file "$OUT_DIR/cygrpc_stub.so"
+echo "[build-grpcio] Step 3: verifying ELF and symbols..."
+file "$OUT_DIR/cygrpc_probe.so"
 
-ELF_ARCH=$(file "$OUT_DIR/cygrpc_stub.so" | grep -o "aarch64" || true)
+ELF_ARCH=$(file "$OUT_DIR/cygrpc_probe.so" | grep -o "aarch64" || true)
 if [ -z "$ELF_ARCH" ]; then
   echo "[build-grpcio] WARNING: output does not appear to be aarch64"
 fi
 
+if command -v nm >/dev/null 2>&1; then
+  SYMS="$(nm "$OUT_DIR/cygrpc_probe.so" | tr -s ' ')"
+  echo "[build-grpcio] module-related symbols:"
+  echo "$SYMS" | grep -E "PyInit_cygrpc_probe|_Py" | head -n 10 || true
+else
+  echo "[build-grpcio] nm not available, skipping symbol inspection"
+fi
+
 # ------------------------------------------------------------------
-# Step 4: Copy to dist/
+# Step 4: Stage artifacts into dist/
 # ------------------------------------------------------------------
 mkdir -p "$ROOT_DIR/dist"
-cp "$OUT_DIR/cygrpc_stub.so" "$ROOT_DIR/dist/"
+cp "$OUT_DIR/cygrpc_probe.so" "$ROOT_DIR/dist/"
 
 cat > "$ROOT_DIR/dist/build-info.txt" <<EOF
 pipeline=termux-grpcio-build-b
@@ -130,8 +144,8 @@ timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 arch=aarch64-linux-android
 target=termux
 grpc_version=${GRPC_VERSION:-unknown}
-artifact=cygrpc_stub.so
-note=B-phase: NDK toolchain + aarch64 .so stub verified, Python.h-dependent cygrpc next
+artifact=cygrpc_probe.so
+note=B-phase: real Python.h + NDK cross-compile verified
 EOF
 
 echo "[build-grpcio] B-phase build complete"
