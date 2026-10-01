@@ -20,8 +20,8 @@ echo "--- NDK info ---"
 if [ -n "${ANDROID_NDK_HOME:-}" ]; then
   echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}"
   echo "NDK version file: $(cat "$ANDROID_NDK_HOME/ndk-build" 2>/dev/null | head -n 1 || true)"
-  if [ -f "$ANDROID_NDK_Source/meta/AndroidManifest.xml" ]; then
-    cat "$ANDROID_NDK_Source/meta/AndroidManifest.xml"
+  if [ -f "${ANDROID_NDK_HOME}/meta/AndroidManifest.xml" ]; then
+    cat "${ANDROID_NDK_HOME}/meta/AndroidManifest.xml"
   fi
   echo "ndk-build version: $(ndk-build -v 2>/dev/null || true)"
 elif [ -n "${NDK_HOME:-}" ]; then
