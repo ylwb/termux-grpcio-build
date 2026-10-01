@@ -49,7 +49,7 @@ void smoke_hello(void) {
 EOF
 
 $CLANG \
-  --sysroot="$NDK_ROOT/sysroot" \
+  --sysroot="$NDK_TOOLCHAIN/sysroot" \
   -shared -fPIC \
   -o "$OUT_DIR/libsmoke_ext.so" \
   "$SRC_DIR/smoke_ext.c"
