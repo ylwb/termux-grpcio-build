@@ -51,10 +51,14 @@ else
   fi
 
   echo "[termux-python] extracting headers only"
-  # GitHub tarball has top-level dir cpython-${CPYTHON_TAG}/
-  CPYTHON_SRC_DIR="$BUILD_DIR/cpython-${CPYTHON_TAG}"
+  # GitHub tarball top-level dir is cpython-<version> (no 'v')
+  CPYTHON_SRC_DIR="$BUILD_DIR/cpython-${CPYTHON_FULL_VERSION}"
   if [ ! -d "$CPYTHON_SRC_DIR" ]; then
     tar -xzf "$CPYTHON_TARBALL" -C "$BUILD_DIR"
+    # The extracted dir name matches the tag without 'v'
+    if [ -d "$BUILD_DIR/cpython-${CPYTHON_TAG}" ]; then
+      mv "$BUILD_DIR/cpython-${CPYTHON_TAG}" "$CPYTHON_SRC_DIR"
+    fi
   fi
 
   if [ ! -d "$CPYTHON_SRC_DIR/Include" ]; then
