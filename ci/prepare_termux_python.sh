@@ -3,11 +3,11 @@ set -euo pipefail
 
 # Prepare a *target-side* Python layout for cross-building grpcio.
 #
-# This downloads CPython public headers so that a cross-compiled extension
-# can actually use Python.h.
+# Downloads CPython public headers from GitHub (reliable across all version
+# tags) so that a cross-compiled extension can actually use Python.h.
 #
-# It still does NOT build the full CPython interpreter for the target; it is
-# a practical middle step between "no headers" and "full CPython bootstrap".
+# This still does NOT build the full CPython interpreter for the target; it
+# is a practical middle step between "no headers" and "full CPython bootstrap".
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
@@ -23,37 +23,54 @@ TARGET_PYTHON_PLATFORM=termux-aarch64
 PYTHON_TARGET=${PYTHON_TARGET}
 EOF
 
+# Determine full CPython patch version
+case "$TARGET_PYTHON_VERSION" in
+  3.13) CPYTHON_FULL_VERSION="3.13.3" ;;
+  3.12) CPYTHON_FULL_VERSION="3.12.7" ;;
+  3.11) CPYTHON_FULL_VERSION="3.11.9" ;;
+  3.10) CPYTHON_FULL_VERSION="3.10.14" ;;
+  *)
+    CPYTHON_FULL_VERSION="${TARGET_PYTHON_VERSION}0"
+    echo "[termux-python] WARNING: using guessed full version ${CPYTHON_FULL_VERSION}"
+    ;;
+esac
+
+echo "[termux-python] targeting CPython ${CPYTHON_FULL_VERSION}"
+
 if [ -f "$PYTHON_TARGET/include/Python.h" ]; then
   echo "[termux-python] Python.h already present, skipping download"
 else
-  # Determine full CPython version (e.g. 3.12.12) from Python_VERSION
-  # Default to .0 suffix if not specified
-  CPYTHON_FULL_VERSION="${CPYTHON_FULL_VERSION:-${TARGET_PYTHON_VERSION}$(python3 -c "import sys;print('.'+str(sys.version_info[2]))" 2>/dev/null | cut -d'.' -f2 || echo '.12')}"
-  # Simplify: just use a known good full version
-  case "$TARGET_PYTHON_VERSION" in
-    3.12) CPYTHON_FULL_VERSION="3.12.7" ;;
-    3.11) CPYTHON_FULL_VERSION="3.11.9" ;;
-    3.10) CPYTHON_FULL_VERSION="3.10.14" ;;
-    *) CPYTHON_FULL_VERSION="${TARGET_PYTHON_VERSION}0" ;;
-  esac
+  # Use GitHub CPython source tarball - always available for any tag
+  CPYTHON_TAG="v${CPYTHON_FULL_VERSION}"
+  CPYTHON_TARBALL="$BUILD_DIR/cpython-${CPYTHON_TAG}.tar.gz"
+  CPYTHON_URL="https://github.com/python/cpython/archive/refs/tags/${CPYTHON_TAG}.tar.gz"
 
-  echo "[termux-python] downloading CPython ${CPYTHON_FULL_VERSION} headers"
-  CPYTHON_TARBALL="$BUILD_DIR/Python-${CPYTHON_FULL_VERSION}.tgz"
+  echo "[termux-python] downloading ${CPYTHON_URL}"
   if [ ! -f "$CPYTHON_TARBALL" ]; then
-    curl -fsSL \
-      "https://www.python.org/ftp/python/${TARGET_PYTHON_VERSION}/Python-${CPYTHON_FULL_VERSION}.tgz" \
-      -o "$CPYTHON_TARBALL"
+    curl -fsSL --retry 3 --retry-delay 5 -o "$CPYTHON_TARBALL" "$CPYTHON_URL"
   fi
 
   echo "[termux-python] extracting headers only"
-  # Extract only the Include directory
-  tar -xzf "$CPYTHON_TARBALL" \
-    "Python-${CPYTHON_FULL_VERSION}/Include" \
-    -C "$BUILD_DIR"
+  # GitHub tarball has top-level dir cpython-${CPYTHON_TAG}/
+  CPYTHON_SRC_DIR="$BUILD_DIR/cpython-${CPYTHON_TAG}"
+  if [ ! -d "$CPYTHON_SRC_DIR" ]; then
+    tar -xzf "$CPYTHON_TARBALL" -C "$BUILD_DIR"
+  fi
+
+  if [ ! -d "$CPYTHON_SRC_DIR/Include" ]; then
+    echo "[termux-python] ERROR: ${CPYTHON_SRC_DIR}/Include not found"
+    ls "$CPYTHON_SRC_DIR/" 2>/dev/null | head -n 30
+    exit 1
+  fi
 
   # Copy headers into our target layout
-  cp -rf "$BUILD_DIR/Python-${CPYTHON_FULL_VERSION}/Include/"* \
-    "$PYTHON_TARGET/include/"
+  cp -rf "$CPYTHON_SRC_DIR/Include/"* "$PYTHON_TARGET/include/"
+
+  # Verify
+  if [ ! -f "$PYTHON_TARGET/include/Python.h" ]; then
+    echo "[termux-python] ERROR: Python.h not found after copy"
+    exit 1
+  fi
 
   echo "[termux-python] headers staged at $PYTHON_TARGET/include"
 fi
@@ -83,12 +100,5 @@ case "\${1:-}" in
 esac
 EOF
 chmod +x "$PYTHON_TARGET/bin/python-config"
-
-# Verify Python.h is in place
-if [ ! -f "$PYTHON_TARGET/include/Python.h" ]; then
-  echo "[termux-python] ERROR: Python.h not found after staging"
-  ls -la "$PYTHON_TARGET/include/" | head -n 20
-  exit 1
-fi
 
 echo "[termux-python] target Python layout ready with real headers"
