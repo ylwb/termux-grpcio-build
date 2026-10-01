@@ -75,25 +75,19 @@ echo "[build-grpcio] toolchain verification passed"
 # ------------------------------------------------------------------
 echo "[build-grpcio] Step 2: building minimal cygrpc stub..."
 cat > "$OUT_DIR/cygrpc_stub.c" <<'EOF'
-#define PY_SSIZE_T_CLEAN
-#include <Python.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-static PyMethodDef cygrpc_methods[] = {
-  {"grpc_version", (PyCFunction)(void*)0, METH_NOARGS, "stub"},
-  {NULL, NULL, 0, NULL}
-};
+const char *cygrpc_stub_name(void) {
+  return "cygrpc-stub";
+}
 
-static PyModuleDef cygrpc_module = {
-  PyModuleDef_HEAD_INIT,
-  "cygrpc",
-  "cygrpc stub for Termux aarch64",
-  -1,
-  cygrpc_methods,
-  NULL, NULL, NULL, NULL
-};
+int cygrpc_stub_add(int a, int b) {
+  return a + b;
+}
 
-PyMODINIT_FUNC PyInit_cygrpc(void) {
-  return PyModule_Create(&cygrpc_module);
+void cygrpc_stub_hello(void) {
+  printf("cygrpc-stub: built for aarch64 termux target\n");
 }
 EOF
 
@@ -111,6 +105,7 @@ if [ ! -f "$OUT_DIR/cygrpc_stub.so" ]; then
   echo "[build-grpcio] ERROR: cygrpc stub build failed"
   exit 1
 fi
+echo "[build-grpcio] cygrpc stub built without Python.h dependency"
 
 # ------------------------------------------------------------------
 # Step 3: Verify output is valid aarch64 ELF
@@ -136,7 +131,7 @@ arch=aarch64-linux-android
 target=termux
 grpc_version=${GRPC_VERSION:-unknown}
 artifact=cygrpc_stub.so
-note=B-phase: NDK toolchain + cygrpc stub verified, full build next
+note=B-phase: NDK toolchain + aarch64 .so stub verified, Python.h-dependent cygrpc next
 EOF
 
 echo "[build-grpcio] B-phase build complete"
