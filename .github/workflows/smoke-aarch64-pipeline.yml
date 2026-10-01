@@ -1,0 +1,62 @@
+name: termux-aarch64-pipeline-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      NDK_VERSION:
+        description: "Android NDK version"
+        required: false
+        default: "r27d"
+      TARGET_PYTHON_VERSION:
+        description: "Target Termux Python version (reference only)"
+        required: false
+        default: "3.12"
+
+env:
+  NDK_VERSION: ${{ inputs.NDK_VERSION || 'r27d' }}
+  TARGET_PYTHON_VERSION: ${{ inputs.TARGET_PYTHON_VERSION || '3.12' }}
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+
+      - name: Print NDK environment
+        run: |
+          set -euo pipefail
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-}"
+          echo "NDK_HOME=${NDK_HOME:-}"
+          echo "setup-ndk output path=${{ steps.setup-ndk.outputs.ndk-path }}"
+          echo "setup-ndk full version=${{ steps.setup-ndk.outputs.ndk-full-version }}"
+          echo "PATH head: $(echo "$PATH" | tr ':' '\n' | head -n 20 | tr '\n' ' ')"
+
+      - name: Build minimal aarch64 C extension
+        run: |
+          set -euo pipefail
+          bash ci/build_smoke_ext.sh
+
+      - name: Package smoke artifact
+        run: |
+          set -euo pipefail
+          bash ci/package_smoke_artifact.sh
+
+      - name: Collect smoke report
+        run: |
+          set -euo pipefail
+          bash ci/collect_smoke_report.sh
+
+      - name: Upload smoke artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: termux-aarch64-smoke
+          path: ${{ github.workspace }}/dist

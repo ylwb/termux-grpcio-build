@@ -1,0 +1,93 @@
+name: build-grpcio-for-termux-aarch64
+
+on:
+  workflow_dispatch:
+    inputs:
+      GRPCIO_VERSION:
+        description: "grpcio version"
+        required: true
+        default: "1.81.1"
+      NDK_VERSION:
+        description: "Android NDK version"
+        required: false
+        default: "r27c"
+      PYTHON_VERSION:
+        description: "target Python minor version"
+        required: true
+        default: "3.12"
+      ENABLE_BORINGSSL_ASM:
+        description: "enable boringssl asm optimizations"
+        required: false
+        default: "false"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      GRPCIO_VERSION: ${{ inputs.GRPCIO_VERSION || '1.81.1' }}
+      NDK_VERSION: ${{ inputs.NDK_VERSION || 'r27c' }}
+      PYTHON_VERSION: ${{ inputs.PYTHON_VERSION || '3.12' }}
+      ENABLE_BORINGSSL_ASM: ${{ inputs.ENABLE_BORINGSSL_ASM || 'false' }}
+      TARGET_ARCH: aarch64-linux-android
+      BUILD_ARCH: x86_64
+
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+        with:
+          path: termux-grpcio-build
+
+      - name: Checkout grpc
+        uses: actions/checkout@v4
+        with:
+          repository: grpc/grpc
+          ref: ${{ inputs.GRPCIO_VERSION }}
+          path: grpc
+
+      - name: Cache NDK
+        uses: actions/cache@v4
+        with:
+          path: ~/android-ndk-${{ inputs.NDK_VERSION }}
+          key: android-ndk-${{ inputs.NDK_VERSION }}
+
+      - name: Install Android NDK
+        working-directory: termux-grpcio-build
+        run: |
+          set -euo pipefail
+          bash ci/install_ndk.sh
+
+      - name: Install host build dependencies
+        working-directory: termux-grpcio-build
+        run: |
+          set -euo pipefail
+          bash ci/install_host_deps.sh
+
+      - name: Prepare target Python layout
+        working-directory: termux-grpcio-build
+        run: |
+          set -euo pipefail
+          bash ci/prepare_termux_python.sh
+
+      - name: Build grpcio
+        working-directory: termux-grpcio-build
+        run: |
+          set -euo pipefail
+          bash ci/build_grpcio.sh
+
+      - name: Package artifact
+        working-directory: termux-grpcio-build
+        run: |
+          set -euo pipefail
+          bash ci/package_artifact.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grpcio-termux-aarch64-py${{ inputs.PYTHON_VERSION || '3.12' }}
+          path: termux-grpcio-build/dist
+
+      - name: Print build report
+        working-directory: termux-grpcio-build
+        run: |
+          set -euo pipefail
+          bash ci/collect_report.sh
