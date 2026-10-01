@@ -3,17 +3,17 @@ name: build-grpcio-for-termux-aarch64
 on:
   workflow_dispatch:
     inputs:
-      GRPCIO_VERSION:
-        description: "grpcio version"
-        required: true
-        default: "1.81.1"
+      GRPC_VERSION:
+        description: "grpc source tag"
+        required: false
+        default: "v1.81.1"
       NDK_VERSION:
         description: "Android NDK version"
         required: false
-        default: "r27c"
+        default: "r27d"
       PYTHON_VERSION:
         description: "target Python minor version"
-        required: true
+        required: false
         default: "3.12"
       ENABLE_BORINGSSL_ASM:
         description: "enable boringssl asm optimizations"
@@ -23,9 +23,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
-      GRPCIO_VERSION: ${{ inputs.GRPCIO_VERSION || '1.81.1' }}
-      NDK_VERSION: ${{ inputs.NDK_VERSION || 'r27c' }}
+      GRPC_VERSION: ${{ inputs.GRPC_VERSION || 'v1.81.1' }}
+      NDK_VERSION: ${{ inputs.NDK_VERSION || 'r27d' }}
       PYTHON_VERSION: ${{ inputs.PYTHON_VERSION || '3.12' }}
       ENABLE_BORINGSSL_ASM: ${{ inputs.ENABLE_BORINGSSL_ASM || 'false' }}
       TARGET_ARCH: aarch64-linux-android
@@ -34,48 +35,44 @@ jobs:
     steps:
       - name: Checkout build repo
         uses: actions/checkout@v4
-        with:
-          path: termux-grpcio-build
 
-      - name: Checkout grpc
-        uses: actions/checkout@v4
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
         with:
-          repository: grpc/grpc
-          ref: ${{ inputs.GRPCIO_VERSION }}
-          path: grpc
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
 
-      - name: Cache NDK
-        uses: actions/cache@v4
-        with:
-          path: ~/android-ndk-${{ inputs.NDK_VERSION }}
-          key: android-ndk-${{ inputs.NDK_VERSION }}
-
-      - name: Install Android NDK
-        working-directory: termux-grpcio-build
+      - name: Print NDK environment
         run: |
           set -euo pipefail
-          bash ci/install_ndk.sh
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-}"
+          echo "NDK_HOME=${NDK_HOME:-}"
+          echo "setup-ndk output path=${{ steps.setup-ndk.outputs.ndk-path }}"
+          echo "setup-ndk full version=${{ steps.setup-ndk.outputs.ndk-full-version }}"
+          echo "PATH head: $(echo "$PATH" | tr ':' '\n' | head -n 20 | tr '\n' ' ')"
 
       - name: Install host build dependencies
-        working-directory: termux-grpcio-build
         run: |
           set -euo pipefail
           bash ci/install_host_deps.sh
 
       - name: Prepare target Python layout
-        working-directory: termux-grpcio-build
         run: |
           set -euo pipefail
           bash ci/prepare_termux_python.sh
 
+      - name: Fetch grpc source
+        run: |
+          set -euo pipefail
+          bash ci/fetch_grpc.sh
+
       - name: Build grpcio
-        working-directory: termux-grpcio-build
         run: |
           set -euo pipefail
           bash ci/build_grpcio.sh
 
       - name: Package artifact
-        working-directory: termux-grpcio-build
         run: |
           set -euo pipefail
           bash ci/package_artifact.sh
@@ -84,10 +81,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: grpcio-termux-aarch64-py${{ inputs.PYTHON_VERSION || '3.12' }}
-          path: termux-grpcio-build/dist
+          path: dist
 
       - name: Print build report
-        working-directory: termux-grpcio-build
         run: |
           set -euo pipefail
           bash ci/collect_report.sh
